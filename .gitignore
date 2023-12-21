@@ -1,0 +1,14 @@
+# Ignore everything
+*
+
+# But not these files...
+!.gitignore
+!audiobook.py
+!convert.py
+!chapters.yaml
+!README.md
+!requirements.txt
+!api.py
+!server.py
+!test_audiobook.py
+!tts_demo.ipynb
