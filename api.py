@@ -34,11 +34,24 @@ def delete(dir_name):
         print(response.status_code)
 
 if __name__ == "__main__":
-    # files_to_download = get_list()
-    # for file in files_to_download:
-    #     name = file['dir']
-    #     size = file['size']
-    #     download(name, size)
-    #     # delete(index)
-    # list()
-    concatenate_audio_pydub("final_combined_wavs/", "chapter_2.wav")
+    all_files = get_list()
+    chapters = load_chapters_from_yaml('chapters.yaml')
+    # check if the file dirs are pages in chapters
+    files_in_chapters = []
+    for file in all_files:
+        name = int(file['dir'])
+        for chapter in chapters:
+            if chapter.chapter_start_page <= name <= chapter.chapter_end_page:
+                files_in_chapters.append(file)
+                break
+    for file in files_in_chapters:
+        name = file['dir']
+        size = file['size']
+        download(name, size)
+    for chapter in chapters:
+        concatenate_audio_pydub("final_combined_wavs/", f"chapter_{chapter.chapter_number}.wav")
+        # move files to subdirectory to clean up
+        os.makedirs(f"final_combined_wavs/chapter_{chapter.chapter_number}", exist_ok=True)
+        for file in os.listdir("final_combined_wavs/"):
+            if file.endswith(".wav"):
+                os.rename(f"final_combined_wavs/{file}", f"final_combined_wavs/chapter_{chapter.chapter_number}/{file}")
