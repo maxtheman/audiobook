@@ -270,6 +270,7 @@ def make_page_reading(existing_figures, tts, page, page_number, header_and_foote
                                 page_number=page_number,
                                 figure_description=description)
                 figures.append(figure)
+                existing_figures.append(figure_name)  # Update the existing_figures list
     working_page.set_figures(figures)
     combined_text = working_page.combine_cleaned_text_and_descriptions()
     final_text_to_write, _ = chunk_text(combined_text, 200, working_page.page_image_uri)
