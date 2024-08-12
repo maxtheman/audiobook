@@ -2,13 +2,13 @@ import pytest
 from audiobook import setup_tts, describe_image, chunk_text, concatenate_audio_pydub, make_page_reading, Page, PydanticPage
 import os
 import base64
+import shutil
 import tempfile
 from unittest.mock import patch, MagicMock
 from dotenv import load_dotenv
 
 load_dotenv()
 
-import shutil
 
 @pytest.fixture
 def setup_files():
@@ -212,7 +212,7 @@ def test_page_methods(setup_files, setup_page_image):
             assert isinstance(pydantic_page, PydanticPage)
             assert pydantic_page.page_number == page_start
             assert pydantic_page.page_text is not None
-            assert pydantic_page.page_image_uri is not None
+            assert pydantic_page.page_image_uri is  not None
             assert pydantic_page.page_audio_uri is not None
             assert pydantic_page.figures == []
 

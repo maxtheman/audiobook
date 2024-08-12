@@ -7,7 +7,7 @@ Clone this repo and create an environment from requirements.txt
 
 The first time you use modal it will prompt you to log in. You will need to set the OPENAI_API_KEY in modal secrets for this to work.
 
-Running audiobook.py tts requires a model to be downloaded that is ~2GB. It will be saved in the repo itself, but is ignored by fit.
+Running audiobook.py tts requires a model to be downloaded that is ~2GB. It will be saved in the repo itself, but is ignored by git.
 
 ##Usage
 

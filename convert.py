@@ -1,7 +1,7 @@
 import asyncio
 import fitz
 import modal
-from audiobook import setup_tts, make_page_reading, Chapter, Doc, PydanticPage, Figures, load_chapters_from_yaml
+from audiobook import setup_tts, make_page_reading, Chapter, PydanticPage, load_chapters_from_yaml, make_page
 
 # Initialize the modal stub and configure the container image
 stub = modal.Stub(name="audiobook")
@@ -25,21 +25,27 @@ def download_tts_model():
 
 # Asynchronous function to process each page and generate audio
 @stub.function(gpu="any", network_file_systems={"/outputs": volume}, 
-               image=image, 
+               image=image,
                mounts=mounts, 
                secret=modal.Secret.from_name("OPENAI_API_KEY"), 
                timeout=1800)
-async def make_doc_readings(doc_path_local, page_number):
+async def read_page_aloud(page_json):
     '''Get the current working document from the working_doc_dict, process the indicated page,
     and update the working_doc_dict with the new pages and figures'''
     # Initialize TTS and open the document
     tts = setup_tts()
+
+    # Process the page and generate audio
+    page = make_page_reading(tts, page_json['page_text'], page_json['page_audio_uri'], page_json['page_number'], page_json['header_and_footer'], speaker_location="/mount/speaker-longer-enhanced-90p.wav")
+
+async def make_pages(doc_path_local, page_number):
+    '''Get the current working document from the working_doc_dict, process the indicated page,
+    and update the working_doc_dict with the new pages and figures'''
+    figures = await stub.working_doc_dict.get.aio("figures")
+    chapters = await stub.working_doc_dict.get.aio("chapters")
     doc = fitz.open("/" + doc_path_local)
     page = doc[page_number]
     existing_figure_names = []
-
-    figures = await stub.working_doc_dict.get.aio("figures")
-    chapters = await stub.working_doc_dict.get.aio("chapters")
 
     if figures is None:
         figures = []
@@ -61,16 +67,7 @@ async def make_doc_readings(doc_path_local, page_number):
         header_and_footer['header'] = current_chapter.chapter_title_header
     if current_chapter.chapter_title_footer != "":
         header_and_footer['footer'] = current_chapter.chapter_title_footer
-
-    # Process the page and generate audio
-    page = make_page_reading(existing_figure_names, tts, page, page_number, header_and_footer, speaker_location="/mount/speaker-longer-enhanced-90p.wav")
-
-    #check that page is a PydanticPage
-    assert isinstance(page, PydanticPage)
-
-    # add page.figures to figures
-    figures.extend(page.figures)
-    await stub.working_doc_dict.put.aio("figures", figures)
+    make_page(existing_figure_names, page, page_number, header_and_footer)
 
 
 # Main entry point for local execution
@@ -92,9 +89,11 @@ async def main_thread():
     for chapter in chapters:
         page_start = chapter.chapter_start_page
         page_end = chapter.chapter_end_page
+        for page_number in range(page_start, page_end + 1):
+            make_pages(doc_path_local, page_number)
         # Process each page asynchronously
-        tasks = [make_doc_readings.remote.aio(doc_path_local, page_number)
-                for page_number in range(page_start, page_end + 1)]
+        # tasks = [read_page_aloud.remote.aio(doc_path_local, page_number)
+        #         for page_number in range(page_start, page_end + 1)]
 
     await asyncio.gather(*tasks)
 

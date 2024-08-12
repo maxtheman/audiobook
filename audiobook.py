@@ -7,13 +7,12 @@ from pydub import AudioSegment
 from tqdm import tqdm
 from functools import reduce
 import fitz
-import shutil
 import yaml
 import re
-from pydantic import BaseModel, validator
+from pydantic import BaseModel
 from enum import Enum
 
-def setup_tts():
+def setup_tts(override_device=None):
     os.environ["COQUI_TOS_AGREED"] = "1"
     if os.getenv('USER') != 'max': #hack - only use relative on local system
         os.environ["TTS_HOME"] = "/outputs/models/"
@@ -30,12 +29,18 @@ def setup_tts():
     torch.set_default_device(device)
     tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2")
     tts.to(device)
+    if override_device:
+        device = override_device
+        tts.to(override_device)
+    print(f"TTS model loaded on {device}")
     return tts
 
 class LLM(Enum):
     LLAVA = "ollama/llava"
+    HAIKU = "claude-haiku"
     GPT_VISION = "gpt-4-vision-preview"
     GPT_TURBO = "gpt-4-1106-preview"
+    GPT_4_O = "gpt-4o"
 
 def get_llm_response(model: LLM, messages, images = None) -> str:
         '''Responsible for making the completions from LiteLLM'''
@@ -43,21 +48,21 @@ def get_llm_response(model: LLM, messages, images = None) -> str:
         _images = []
         max_tokens=4000
         params = {
-                'model': model.value,
-                'max_tokens': 4000,
-                'messages': messages,
-            }
+            'model': model.value,
+            'max_tokens': max_tokens,
+            'messages': messages,
+        }
         if images:
-            if type(images) == 'list':
+            if type(images) is list:
                 _images = images
             else:
                 _images = [images]
         else:
             _images = None
-        if type(model) == str:
+        if type(model) is str:
             model = LLM(model)
         if model == LLM.LLAVA and _images:
-            if type(images) == 'list':
+            if type(images) is list:
                 params['images'] = _images
             else:
                 params['images'] = [_images]
@@ -65,7 +70,7 @@ def get_llm_response(model: LLM, messages, images = None) -> str:
         return response.choices[0].message.content
 
 def describe_image(image_uri, figure_name, surrounding_text, model=LLM.GPT_VISION, mode="specific_image"):
-    if type(model) == str:
+    if type(model) is str:
         model = LLM(model)
     if image_uri is None:
         raise ValueError("No image provided")
@@ -73,7 +78,7 @@ def describe_image(image_uri, figure_name, surrounding_text, model=LLM.GPT_VISIO
         raise ValueError("Image could not be read")
     image = base64.b64encode(open(image_uri, "rb").read()).decode("utf-8")
     if mode == "specific_image":
-        message = "Please describe the picture named {0} on this page. How is it related to the following text? Text: {0} Describe its importance to the passage, in detail. Describe the image directly as if you were writing a description in a book, e.g., say 'the image is' instead of 'the image you shared is', for example.".format(figure_name, surrounding_text)
+        message = "Please describe the picture named {0} on this page. How is it related to the following text? Text: {1} Describe its importance to the passage, in detail. Describe the image directly as if you were writing a description in a book, e.g., say 'the image is' instead of 'the image you shared is', for example.".format(figure_name, surrounding_text)
     elif mode == "general_cleanup":
         message = "The following text is from an OCR of a page. Obey the following rules exactly — failure to do so could result in user misunderstanding and harm. You have the original image of the page attached. Your job is to validate the work and clean up the OCR. If the page contains images or figures, ignore their presence. Please provide a cleaned up version of this text that could easily be passed to a text-to-speech program, removing any obvious grammatical errors resulting from the OCR of the page. More formal texts may have chapter names at the start of the page — remove these if they don't make sense inline with the text. The downstream program can only handle english and numbers, so mathematical symbols, tables, and special characters — including brackets — should all be clarified. Remove extraneous characters if they have been added, and for easy listening add additonal language if it's not clear that something is a title, or that it's about to transition to a table or math equation, for example. Do NOT add summaries of the page — this is just one page of the book, the author will summarize if appropriate. If you are unable to clarify, leave it as is. Apart from these instructions, do NOT take liberties with the text. Here is the text {0}".format(surrounding_text)
         response = completion(
@@ -92,8 +97,6 @@ def describe_image(image_uri, figure_name, surrounding_text, model=LLM.GPT_VISIO
         return get_llm_response(model, messages)
     else:
         raise ValueError(f"{model} not supported")
-
-# def interpret_figure(figure_name, model=LLM.GPT_VISION):
 
 def chunk_text(text, max_length, page_image, described_figures=None, handle_figures=False):
     if described_figures is None:
@@ -148,6 +151,7 @@ def concatenate_audio_pydub(path, output_file_name, verbose=1):
     # Export the final concatenated audio
     output_path = os.path.join(path, output_file_name)
     final_clip.export(output_path, format="wav")
+    return output_path
 
 
 class Figures(BaseModel):
@@ -158,12 +162,13 @@ class Figures(BaseModel):
 class PydanticPage(BaseModel):
     page_number: int
     page_text: str
+    final_text_list: list[str]
     page_image_uri: str
     page_audio_uri: str
     figures: list[Figures]
 
 class Page():
-    def __init__(self, page, page_number, header_and_footer={'header': None, 'footer': None}):
+    def __init__(self, page: fitz.Page, page_number: int, header_and_footer={'header': None, 'footer': None}):
         self.page_audio_uri = "outputs/pages/{0}/audio".format(page_number)
         self.page_image_uri = "outputs/pages/{0}/image".format(page_number)
         if os.getenv('USER') != 'max': #if not local
@@ -187,9 +192,13 @@ class Page():
                 self.page_text = self.page_text[:-len(footer)]
         self.cleaned_text = describe_image(full_image_path, "", self.page_text, mode="general_cleanup")
         self.figures = []
+        self.final_text_list = []
     
     def set_figures(self, figures):
         self.figures = figures
+
+    def set_final_text_list(self, final_text_list):
+        self.final_text_list = final_text_list
 
     def extract_figure_names(self):
         figure_regex = r'Figure (\d+\.\d+)'
@@ -197,7 +206,7 @@ class Page():
         return figure_names
     
     def check_if_image_is_present(self, figure_name):
-        prompt = "Looks at this page. Does it contain an image titled {0}? Return only the word True, or the word False.".format(figure_name, self.page_text)
+        prompt = "Looks at this page. Does it contain an image titled {0}? Return only the word True, or the word False.".format(figure_name)
         image = open(self.page_image_uri + "/page.png", "rb").read()
         image_base64 = base64.b64encode(image).decode("utf-8")
         base_64image_encoded = f"data:image/jpeg;base64,{image_base64}"
@@ -225,10 +234,10 @@ class Page():
     def return_pydantic_page(self):
         return PydanticPage(page_number=self.page_number,
                             page_text=self.combine_cleaned_text_and_descriptions(),
+                            final_text_list=self.final_text_list,
                             page_image_uri=self.page_image_uri + "/page.png",
                             page_audio_uri=self.page_audio_uri + "/combined.wav",
                             figures=self.figures)
-
     def __str__(self):
         return self.page_text
 
@@ -244,13 +253,11 @@ class Doc(BaseModel):
     figures: list[Figures]
     chapters: list[Chapter]
 
-def make_page_reading(existing_figures, tts, page, page_number, header_and_footer={'header': None, 'footer': None}, speaker_location="speaker-longer-enhanced-90p.wav"):
-    '''This function literally makes the out-loud TTS readings of the page and saves the file
-    existing_figures: list of figures already described in the document
-    tts: tts instance from setup_tts
+def make_page(existing_figures: list[str], page, page_number, header_and_footer={'header': None, 'footer': None}):
+    """Make a page from the fitz page and return a PydanticPage object
     page: page from fitz.open
     page_number: page number from fitz.open
-    '''
+    existing_figures: list of figures already described in the document"""
     working_page = Page(page, page_number)
     if header_and_footer['header'] is None and header_and_footer['footer'] is None:
         pass
@@ -274,13 +281,20 @@ def make_page_reading(existing_figures, tts, page, page_number, header_and_foote
     working_page.set_figures(figures)
     combined_text = working_page.combine_cleaned_text_and_descriptions()
     final_text_to_write, _ = chunk_text(combined_text, 200, working_page.page_image_uri)
-    for page_number, text_chunk in tqdm(enumerate(final_text_to_write)):
+    working_page.set_final_text_list(final_text_to_write)
+    return working_page.return_pydantic_page()
+
+def make_page_reading(tts: TTS, page_text, page_audio_uri, page_number, speaker_location="speaker-longer-enhanced-90p.wav"):
+    '''This function literally makes the out-loud TTS readings of the page and saves the file
+    tts: tts instance from setup_tts
+    '''
+    for page_number, text_chunk in tqdm(enumerate(page_text)):
         tts.tts_to_file(text=text_chunk,
-                        file_path=working_page.page_audio_uri + "/{0}.wav".format(page_number),
+                        file_path=page_audio_uri + "/{0}.wav".format(page_number),
                         speaker_wav=speaker_location,
                         language="en")
-    concatenate_audio_pydub(working_page.page_audio_uri, "combined.wav")
-    return working_page.return_pydantic_page()
+    path = concatenate_audio_pydub(page_audio_uri, "combined.wav")
+    return path
 
 def load_chapters_from_yaml(file_path):
     with open(file_path, 'r') as file:
